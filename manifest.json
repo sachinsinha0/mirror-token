@@ -1,0 +1,15 @@
+{
+  "name": "Mirror Token",
+  "id": "mirror-token-olympus",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/index.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["https://api.figma.com"]
+  },
+  "documentAccess": "dynamic-page",
+  "capabilities": [],
+  "permissions": ["teamlibrary"],
+  "enableProposedApi": true
+}
