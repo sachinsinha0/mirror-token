@@ -1,6 +1,6 @@
 {
-  "name": "Mirror Token",
-  "id": "mirror-token-olympus",
+  "name": "Mirror Link",
+  "id": "1625248083768009454",
   "api": "1.0.0",
   "main": "dist/code.js",
   "ui": "dist/index.html",
@@ -10,6 +10,5 @@
   },
   "documentAccess": "dynamic-page",
   "capabilities": [],
-  "permissions": ["teamlibrary"],
-  "enableProposedApi": true
+  "permissions": ["teamlibrary"]
 }

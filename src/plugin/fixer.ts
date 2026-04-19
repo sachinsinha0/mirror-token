@@ -1,4 +1,5 @@
 import { ColorIssue, TextIssue } from './types';
+import { weightNumberToFigmaStyle } from './utils';
 
 /**
  * Load ALL fonts used in a text node (handles mixed font ranges).
@@ -54,8 +55,9 @@ export async function fixColorIssue(issue: ColorIssue): Promise<boolean> {
         var originalOpacity = paint.opacity != null ? paint.opacity : 1;
         var boundPaint = figma.variables.setBoundVariableForPaint(paint, 'color', variable);
         if (boundPaint.opacity !== originalOpacity) {
-          boundPaint = JSON.parse(JSON.stringify(boundPaint));
-          boundPaint.opacity = originalOpacity;
+          var clonedPaint = JSON.parse(JSON.stringify(boundPaint)) as { opacity: number } & typeof boundPaint;
+          clonedPaint.opacity = originalOpacity;
+          boundPaint = clonedPaint;
         }
         fills[issue.paintIndex] = boundPaint;
         (node as any).fills = fills;
@@ -70,8 +72,9 @@ export async function fixColorIssue(issue: ColorIssue): Promise<boolean> {
         var originalStrokeOpacity = strokePaint.opacity != null ? strokePaint.opacity : 1;
         var boundStroke = figma.variables.setBoundVariableForPaint(strokePaint, 'color', variable);
         if (boundStroke.opacity !== originalStrokeOpacity) {
-          boundStroke = JSON.parse(JSON.stringify(boundStroke));
-          boundStroke.opacity = originalStrokeOpacity;
+          var clonedStroke = JSON.parse(JSON.stringify(boundStroke)) as { opacity: number } & typeof boundStroke;
+          clonedStroke.opacity = originalStrokeOpacity;
+          boundStroke = clonedStroke;
         }
         strokes[issue.paintIndex] = boundStroke;
         (node as any).strokes = strokes;
@@ -80,18 +83,18 @@ export async function fixColorIssue(issue: ColorIssue): Promise<boolean> {
       return true;
 
     } else if (issue.match.tokenSource === 'paint-style') {
-      if (issue.property === 'fill' && 'fillStyleId' in node) {
-        (node as any).fillStyleId = issue.match.tokenId;
+      if (issue.property === 'fill' && 'setFillStyleIdAsync' in node) {
+        await (node as any).setFillStyleIdAsync(issue.match.tokenId);
         return true;
-      } else if (issue.property === 'stroke' && 'strokeStyleId' in node) {
-        (node as any).strokeStyleId = issue.match.tokenId;
+      } else if (issue.property === 'stroke' && 'setStrokeStyleIdAsync' in node) {
+        await (node as any).setStrokeStyleIdAsync(issue.match.tokenId);
         return true;
       }
     }
 
     return false;
   } catch (err) {
-    console.error('[Mirror Token] Fix failed for node ' + issue.nodeId + ':', err);
+    console.error('[Mirror Link] Fix failed for node ' + issue.nodeId + ':', err);
     return false;
   }
 }
@@ -118,44 +121,46 @@ export async function fixTextIssue(issue: TextIssue): Promise<boolean> {
 
     // BEST: Apply Text Style directly (creates a real link in Figma)
     if (group.textStyleId) {
-      console.log('[Mirror Token] Linking "' + textNode.name + '" → text style "' + group.name + '" (id=' + group.textStyleId + ')');
+      console.log('[Mirror Link] Linking "' + textNode.name + '" → text style "' + group.name + '" (id=' + group.textStyleId + ')');
 
       try {
         // Also try to load the style's font
-        var style = figma.getStyleById(group.textStyleId);
+        var style = await figma.getStyleByIdAsync(group.textStyleId);
         if (style && style.type === 'TEXT') {
           var tsFont = (style as TextStyle).fontName;
           await figma.loadFontAsync(tsFont);
         }
       } catch (e) {
-        console.log('[Mirror Token]   Could not pre-load style font: ' + String(e));
+        console.log('[Mirror Link]   Could not pre-load style font: ' + String(e));
       }
 
       try {
-        textNode.textStyleId = group.textStyleId;
-        console.log('[Mirror Token]   textStyleId set successfully');
+        await textNode.setTextStyleIdAsync(group.textStyleId);
+        console.log('[Mirror Link]   textStyleId set successfully');
         return true;
       } catch (e) {
-        console.error('[Mirror Token]   textStyleId assignment failed: ' + String(e));
+        console.error('[Mirror Link]   setTextStyleIdAsync failed: ' + String(e));
         // Fall through to value-based fix
       }
     }
 
     // FALLBACK: Apply values directly
-    console.log('[Mirror Token] Fallback: applying values for "' + group.name + '" to "' + textNode.name + '"');
+    console.log('[Mirror Link] Fallback: applying values for "' + group.name + '" to "' + textNode.name + '"');
 
     var targetWeight = weightNumberToFigmaStyle(group.fontWeight || 400);
     try {
       var family = 'Inter';
       if (textNode.fontName !== figma.mixed) { family = (textNode.fontName as FontName).family; }
       await figma.loadFontAsync({ family: family, style: targetWeight });
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[Mirror Link] Font load failed:', e);
+    }
 
     var changed = false;
 
     if (group.fontSize !== null && textNode.fontSize !== figma.mixed) {
       try { textNode.fontSize = group.fontSize; changed = true; } catch (e) {
-        console.error('[Mirror Token]   fontSize failed: ' + String(e));
+        console.error('[Mirror Link]   fontSize failed: ' + String(e));
       }
     }
     if (group.fontWeight !== null && textNode.fontName !== figma.mixed) {
@@ -164,66 +169,89 @@ export async function fixTextIssue(issue: TextIssue): Promise<boolean> {
         textNode.fontName = { family: cf.family, style: targetWeight };
         changed = true;
       } catch (e) {
-        console.error('[Mirror Token]   fontWeight failed: ' + String(e));
+        console.error('[Mirror Link]   fontWeight failed: ' + String(e));
       }
     }
 
-    return changed || true;
+    return changed;
   } catch (err) {
-    console.error('[Mirror Token] Text fix failed for node ' + issue.nodeId + ':', err);
+    console.error('[Mirror Link] Text fix failed for node ' + issue.nodeId + ':', err);
     return false;
   }
 }
 
 /**
- * Convert a numeric font weight to Figma's font style string.
- * Figma uses style names like "Regular", "Bold", "Semi Bold", etc.
- */
-function weightNumberToFigmaStyle(weight: number): string {
-  if (weight <= 100) return 'Thin';
-  if (weight <= 200) return 'Extra Light';
-  if (weight <= 300) return 'Light';
-  if (weight <= 400) return 'Regular';
-  if (weight <= 500) return 'Medium';
-  if (weight <= 600) return 'Semi Bold';
-  if (weight <= 700) return 'Bold';
-  if (weight <= 800) return 'Extra Bold';
-  return 'Black';
-}
-
-/**
  * Fix an entire text group: apply a single textStyleId to all node IDs.
+ * Returns per-node reasons for any failures so UI can surface them.
  */
 export async function fixTextGroupNodes(
   nodeIds: string[],
   textStyleId: string,
   onProgress: (done: number, total: number) => void
-): Promise<{ fixed: number; failed: number }> {
+): Promise<{ fixed: number; failed: number; failureReasons: string[] }> {
   var fixed = 0;
   var failed = 0;
+  var failureReasons: string[] = [];
+
+  console.log('[Mirror Link] fix-text-group: starting with ' + nodeIds.length + ' nodes, styleId=' + textStyleId);
 
   // Pre-load the style's font
+  var styleValid = false;
   try {
-    var style = figma.getStyleById(textStyleId);
-    if (style && style.type === 'TEXT') {
+    var style = await figma.getStyleByIdAsync(textStyleId);
+    if (!style) {
+      console.error('[Mirror Link] Style not found for id=' + textStyleId);
+      failureReasons.push('Style not found (id=' + textStyleId + '). Style may not be imported yet.');
+    } else if (style.type !== 'TEXT') {
+      console.error('[Mirror Link] Style is not TEXT type: ' + style.type);
+      failureReasons.push('Style is not a text style (type=' + style.type + ')');
+    } else {
       await figma.loadFontAsync((style as TextStyle).fontName);
+      styleValid = true;
+      console.log('[Mirror Link] Pre-loaded style font: ' + (style as TextStyle).fontName.family + ' ' + (style as TextStyle).fontName.style);
     }
   } catch (e) {
-    console.log('[Mirror Token] Could not pre-load style font: ' + String(e));
+    console.error('[Mirror Link] Could not pre-load style font: ' + String(e));
+    failureReasons.push('Failed to load style font: ' + String(e));
+  }
+
+  if (!styleValid) {
+    // No point trying individual nodes if the style itself is invalid
+    return { fixed: 0, failed: nodeIds.length, failureReasons: failureReasons };
   }
 
   for (var i = 0; i < nodeIds.length; i++) {
+    var nodeId = nodeIds[i];
     try {
-      var node = await figma.getNodeByIdAsync(nodeIds[i]);
-      if (!node || node.type !== 'TEXT') { failed++; continue; }
+      var node = await figma.getNodeByIdAsync(nodeId);
+      if (!node) {
+        failed++;
+        failureReasons.push(nodeId + ': node not found');
+        continue;
+      }
+      if (node.type !== 'TEXT') {
+        failed++;
+        failureReasons.push(nodeId + ': not a text node (type=' + node.type + ')');
+        continue;
+      }
 
       var textNode = node as TextNode;
       await loadAllFontsForNode(textNode);
-      textNode.textStyleId = textStyleId;
-      fixed++;
+      await textNode.setTextStyleIdAsync(textStyleId);
+
+      // Verify it actually applied
+      if (textNode.textStyleId === textStyleId) {
+        fixed++;
+      } else {
+        failed++;
+        failureReasons.push(textNode.name + ': assignment did not persist (actual=' + String(textNode.textStyleId) + ')');
+        console.warn('[Mirror Link] setTextStyleIdAsync did not persist on "' + textNode.name + '"');
+      }
     } catch (e) {
-      console.error('[Mirror Token] Group fix failed for ' + nodeIds[i] + ': ' + String(e));
       failed++;
+      var reason = nodeId + ': ' + String(e);
+      failureReasons.push(reason);
+      console.error('[Mirror Link] Group fix failed for ' + reason);
     }
 
     if ((i + 1) % 20 === 0 || i === nodeIds.length - 1) {
@@ -231,5 +259,6 @@ export async function fixTextGroupNodes(
     }
   }
 
-  return { fixed: fixed, failed: failed };
+  console.log('[Mirror Link] fix-text-group done: ' + fixed + ' fixed, ' + failed + ' failed');
+  return { fixed: fixed, failed: failed, failureReasons: failureReasons };
 }

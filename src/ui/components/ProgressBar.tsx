@@ -15,7 +15,7 @@ export function ProgressBar({ done, total, label }: Props) {
         <span>{label}</span>
         <span>{percent}%</span>
       </div>
-      <div className="progress-bar">
+      <div className="progress-bar" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
         <div className="progress-bar-fill" style={{ width: `${percent}%` }} />
       </div>
       <div className="progress-meta">

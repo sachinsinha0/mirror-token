@@ -44,10 +44,10 @@ interface TextIssueRowProps {
 type Props = ColorIssueRowProps | TextIssueRowProps;
 
 const confidenceColors: Record<string, string> = {
-  exact: '#1B8A5A',
-  high: '#2196F3',
-  medium: '#FF9800',
-  low: '#F44336',
+  exact: 'var(--mt-color-confidence-exact)',
+  high: 'var(--mt-color-confidence-high)',
+  medium: 'var(--mt-color-confidence-medium)',
+  low: 'var(--mt-color-confidence-low)',
 };
 
 const confidenceLabels: Record<string, string> = {
@@ -85,7 +85,7 @@ export function IssueRow(props: Props) {
 
       {/* Main content — click to navigate to node */}
       <div className="issue-row-main" onClick={onSelect} title="Click to select in canvas">
-        <div className="issue-node-name">{issue.nodeName}</div>
+        <div className="issue-node-name" title={issue.nodeName}>{issue.nodeName}</div>
 
         {props.kind === 'color' ? (
           <div className="issue-detail">

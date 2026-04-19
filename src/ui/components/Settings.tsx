@@ -1,19 +1,55 @@
 import React, { useState } from 'react';
+import { LibraryEntry } from '../../shared/types';
+import { extractFileInfo } from '../utils/extractFileKey';
 
 interface Props {
   apiToken: string;
-  libraryFileKey: string;
-  onSave: (apiToken: string, libraryFileKey: string) => void;
+  libraryFileKeys: LibraryEntry[];
+  onSave: (apiToken: string, libraryFileKeys: LibraryEntry[]) => void;
   onClose: () => void;
 }
 
-export function Settings({ apiToken, libraryFileKey, onSave, onClose }: Props) {
+interface LibraryInput {
+  raw: string;   // what user typed (URL or key)
+  label: string; // auto-extracted or existing label
+}
+
+function toInputs(entries: LibraryEntry[]): LibraryInput[] {
+  if (entries.length === 0) return [{ raw: '', label: '' }];
+  return entries.map((e) => ({ raw: e.key, label: e.label }));
+}
+
+export function Settings({ apiToken, libraryFileKeys, onSave, onClose }: Props) {
   const [token, setToken] = useState(apiToken);
-  const [fileKey, setFileKey] = useState(libraryFileKey);
+  const [libraries, setLibraries] = useState<LibraryInput[]>(toInputs(libraryFileKeys));
 
   const handleSave = () => {
-    onSave(token.trim(), fileKey.trim());
+    const cleaned: LibraryEntry[] = [];
+    for (const lib of libraries) {
+      const info = extractFileInfo(lib.raw);
+      if (info.key) {
+        cleaned.push({ key: info.key, label: info.label || lib.label || 'Library' });
+      }
+    }
+    onSave(token.trim(), cleaned);
     onClose();
+  };
+
+  const updateLibraryUrl = (index: number, value: string) => {
+    setLibraries((prev) => {
+      const next = prev.slice();
+      const info = extractFileInfo(value);
+      next[index] = { raw: value, label: info.label || prev[index].label };
+      return next;
+    });
+  };
+
+  const addLibrary = () => {
+    setLibraries((prev) => [...prev, { raw: '', label: '' }]);
+  };
+
+  const removeLibrary = (index: number) => {
+    setLibraries((prev) => prev.filter((_, i) => i !== index));
   };
 
   return (
@@ -35,24 +71,55 @@ export function Settings({ apiToken, libraryFileKey, onSave, onClose }: Props) {
               placeholder="figd_..."
             />
             <div className="settings-hint">
-              Generate at figma.com/settings → Personal Access Tokens.
-              Required to load text styles from the design system library.
+              Generate at figma.com/settings &rarr; Personal Access Tokens.
+              Required to load text styles from design system libraries.
             </div>
           </div>
 
           <div className="settings-field">
-            <label className="settings-label">Library File Key</label>
-            <input
-              type="text"
-              className="settings-input"
-              value={fileKey}
-              onChange={(e) => setFileKey(e.target.value)}
-              placeholder="VCFZJgU9KnGWy7KtxBxSy1"
-            />
-            <div className="settings-hint">
-              The file key from your library's Figma URL:
-              figma.com/design/<strong>FILE_KEY</strong>/...
+            <label className="settings-label">Design System Libraries</label>
+            <div className="settings-hint" style={{ marginBottom: 8 }}>
+              Paste the Figma URL of each library file. The name is extracted automatically.
             </div>
+
+            {libraries.map((lib, i) => (
+              <div key={i} style={{ marginBottom: 8 }}>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    style={{ flex: 1 }}
+                    value={lib.raw}
+                    onChange={(e) => updateLibraryUrl(i, e.target.value)}
+                    placeholder="https://figma.com/design/..."
+                  />
+                  {libraries.length > 1 && (
+                    <button
+                      className="btn btn--ghost"
+                      onClick={() => removeLibrary(i)}
+                      style={{ padding: '4px 6px', fontSize: 12 }}
+                      title="Remove library"
+                      aria-label="Remove library"
+                    >
+                      &times;
+                    </button>
+                  )}
+                </div>
+                {lib.label && (
+                  <div style={{ fontSize: 10, color: 'var(--figma-color-text-secondary, #999)', marginTop: 3, paddingLeft: 2 }}>
+                    {lib.label}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            <button
+              className="btn btn--secondary"
+              onClick={addLibrary}
+              style={{ fontSize: 11, marginTop: 4 }}
+            >
+              + Add Library
+            </button>
           </div>
         </div>
 

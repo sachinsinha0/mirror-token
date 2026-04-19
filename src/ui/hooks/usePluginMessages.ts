@@ -1,15 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
+import { ScanResults, PluginMessage, UIMessage } from '../../shared/types';
 import { onPluginMessage, postToPlugin } from '../utils/messaging';
 
-interface ScanResults {
-  colorIssues: any[];
-  textIssues: any[];
-  totalNodesScanned: number;
-  totalLinkedTokens: number;
-  scanDurationMs: number;
-}
-
-type Status = 'idle' | 'scanning' | 'loading' | 'fixing' | 'done';
+type Status = 'idle' | 'scanning' | 'loading' | 'fixing' | 'done' | 'error';
 
 export function usePluginMessages() {
   const [status, setStatus] = useState<Status>('idle');
@@ -18,15 +11,17 @@ export function usePluginMessages() {
   const [fixResult, setFixResult] = useState<{ fixed: number; failed: number } | null>(null);
   const [debugLines, setDebugLines] = useState<string[]>([]);
   const [loadingMessage, setLoadingMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
-    const unsub = onPluginMessage((msg) => {
+    const unsub = onPluginMessage((msg: PluginMessage) => {
       switch (msg.type) {
         case 'scan-started':
           setStatus('loading');
           setLoadingMessage('Loading design system tokens...');
           setProgress({ done: 0, total: msg.totalNodes });
           setFixResult(null);
+          setErrorMessage('');
           break;
         case 'loading-tokens':
           setStatus('loading');
@@ -51,6 +46,10 @@ export function usePluginMessages() {
           setFixResult({ fixed: msg.fixed, failed: msg.failed });
           setStatus('done');
           break;
+        case 'scan-error':
+          setStatus('error');
+          setErrorMessage(msg.message);
+          break;
         case 'debug-log':
           setDebugLines(msg.lines || []);
           break;
@@ -60,19 +59,15 @@ export function usePluginMessages() {
   }, []);
 
   const scan = useCallback((scope: 'page' | 'selection', textStyleKeys?: Array<{ key: string; name: string }>) => {
-    postToPlugin({ type: 'scan', scope: scope, textStyleKeys: textStyleKeys });
-  }, []);
-
-  const fixAll = useCallback((minConfidence: string) => {
-    postToPlugin({ type: 'fix-all', minConfidence });
+    postToPlugin({ type: 'scan', scope: scope, textStyleKeys: textStyleKeys } as UIMessage);
   }, []);
 
   const linkSelected = useCallback((colorIssueIds: string[], textIssueIds: string[]) => {
-    postToPlugin({ type: 'link-selected', colorIssueIds, textIssueIds });
+    postToPlugin({ type: 'link-selected', colorIssueIds, textIssueIds } as UIMessage);
   }, []);
 
   const selectNode = useCallback((nodeId: string) => {
-    postToPlugin({ type: 'select-node', nodeId });
+    postToPlugin({ type: 'select-node', nodeId } as UIMessage);
   }, []);
 
   return {
@@ -82,8 +77,8 @@ export function usePluginMessages() {
     fixResult,
     debugLines,
     loadingMessage,
+    errorMessage,
     scan,
-    fixAll,
     linkSelected,
     selectNode,
   };

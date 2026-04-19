@@ -1,4 +1,5 @@
 import { RGBA, ColorToken, ColorMatch, Confidence } from './types';
+import { rgbaToHex, normalizeWeight } from './utils';
 
 // ============================================================
 // CIE76 Delta-E color distance in CIELAB space
@@ -53,14 +54,55 @@ function colorDistance(c1: RGBA, c2: RGBA): number {
 }
 
 // ============================================================
-// Matching
+// CIELAB Cache for token colors
 // ============================================================
 
-function rgbaToHex(c: RGBA): string {
-  var to255 = function(v: number) { return Math.round(v * 255); };
-  var hex = function(v: number) { return to255(v).toString(16).padStart(2, '0'); };
-  return '#' + hex(c.r) + hex(c.g) + hex(c.b);
+interface CachedTokenColor {
+  color: RGBA;
+  lab: [number, number, number];
+  alpha: number;
 }
+
+interface CachedToken {
+  token: ColorToken;
+  colors: CachedTokenColor[];
+}
+
+var tokenCache: CachedToken[] = [];
+
+/** Pre-compute Lab values for all token colors. Call once after loading tokens. */
+export function prepareTokenCache(tokens: ColorToken[]): void {
+  tokenCache = [];
+  for (var i = 0; i < tokens.length; i++) {
+    var t = tokens[i];
+    var colors = t.allColors || [t.color];
+    var cached: CachedTokenColor[] = [];
+    for (var ci = 0; ci < colors.length; ci++) {
+      var c = colors[ci];
+      cached.push({
+        color: c,
+        lab: rgbToLab(c.r, c.g, c.b),
+        alpha: c.a != null ? c.a : 1,
+      });
+    }
+    tokenCache.push({ token: t, colors: cached });
+  }
+}
+
+/** Compute distance using pre-computed Lab (for token) vs fresh Lab (for input) */
+function cachedColorDistance(inputLab: [number, number, number], inputAlpha: number, cached: CachedTokenColor): number {
+  var labDist = Math.sqrt(
+    (inputLab[0] - cached.lab[0]) * (inputLab[0] - cached.lab[0]) +
+    (inputLab[1] - cached.lab[1]) * (inputLab[1] - cached.lab[1]) +
+    (inputLab[2] - cached.lab[2]) * (inputLab[2] - cached.lab[2])
+  );
+  var alphaPenalty = Math.abs(inputAlpha - cached.alpha) * 50;
+  return labDist + alphaPenalty;
+}
+
+// ============================================================
+// Matching
+// ============================================================
 
 /** Check if two RGBA values are effectively identical (within rounding) */
 function rgbaMatch(c1: RGBA, c2: RGBA): boolean {
@@ -95,45 +137,52 @@ export function findBestColorMatch(
   var bestToken: ColorToken | null = null;
   var bestDistance = Infinity;
 
-  for (var i = 0; i < tokens.length; i++) {
-    var token = tokens[i];
-    var colors = token.allColors || [token.color];
+  // Use cached Lab values if available (much faster for large token sets)
+  if (tokenCache.length > 0) {
+    var inputLab = rgbToLab(rawColor.r, rawColor.g, rawColor.b);
+    var inputAlpha = rawColor.a != null ? rawColor.a : 1;
 
-    for (var ci = 0; ci < colors.length; ci++) {
-      // Fast path: exact RGBA match (including alpha)
-      if (rgbaMatch(rawColor, colors[ci])) {
-        return {
-          tokenId: token.id,
-          tokenName: token.name,
-          tokenSource: token.source,
-          collectionName: token.collectionName,
-          hex: rgbaToHex(rawColor),
-          distance: 0,
-          confidence: 'exact',
-        };
+    for (var ti = 0; ti < tokenCache.length; ti++) {
+      var ct = tokenCache[ti];
+      for (var ci = 0; ci < ct.colors.length; ci++) {
+        if (rgbaMatch(rawColor, ct.colors[ci].color)) {
+          return {
+            tokenId: ct.token.id, tokenName: ct.token.name,
+            tokenSource: ct.token.source, collectionName: ct.token.collectionName,
+            hex: rgbaToHex(rawColor), distance: 0, confidence: 'exact',
+          };
+        }
+        var d = cachedColorDistance(inputLab, inputAlpha, ct.colors[ci]);
+        if (d < bestDistance) { bestDistance = d; bestToken = ct.token; }
       }
-
-      var d = colorDistance(rawColor, colors[ci]);
-      if (d < bestDistance) {
-        bestDistance = d;
-        bestToken = token;
+    }
+  } else {
+    // Fallback: no cache, compute on the fly
+    for (var i = 0; i < tokens.length; i++) {
+      var token = tokens[i];
+      var colors = token.allColors || [token.color];
+      for (var fi = 0; fi < colors.length; fi++) {
+        if (rgbaMatch(rawColor, colors[fi])) {
+          return {
+            tokenId: token.id, tokenName: token.name,
+            tokenSource: token.source, collectionName: token.collectionName,
+            hex: rgbaToHex(rawColor), distance: 0, confidence: 'exact',
+          };
+        }
+        var fd = colorDistance(rawColor, colors[fi]);
+        if (fd < bestDistance) { bestDistance = fd; bestToken = token; }
       }
     }
   }
 
   if (!bestToken) return null;
-
   var confidence = getConfidence(bestDistance);
   if (!confidence) return null;
 
   return {
-    tokenId: bestToken.id,
-    tokenName: bestToken.name,
-    tokenSource: bestToken.source,
-    collectionName: bestToken.collectionName,
-    hex: bestToken.hex,
-    distance: bestDistance,
-    confidence: confidence,
+    tokenId: bestToken.id, tokenName: bestToken.name,
+    tokenSource: bestToken.source, collectionName: bestToken.collectionName,
+    hex: bestToken.hex, distance: bestDistance, confidence: confidence,
   };
 }
 
@@ -147,14 +196,6 @@ interface TextStyleInfo {
   fontSize: number;
   fontFamily: string;
   fontWeight: string;
-}
-
-/**
- * Normalize font weight strings for comparison.
- * "Semi Bold" → "semibold", "SemiBold" → "semibold"
- */
-function normalizeWeight(w: string): string {
-  return w.toLowerCase().replace(/[\s-_]/g, '');
 }
 
 export function findBestTextMatch(

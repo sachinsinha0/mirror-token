@@ -1,20 +1,15 @@
 import { ColorToken, RGBA, TypographyGroup } from './types';
+import { rgbaToHex, parseWeightToNumber } from './utils';
 
 var debugLog: string[] = [];
 function log(msg: string) {
-  console.log('[Mirror Token] ' + msg);
+  console.log('[Mirror Link] ' + msg);
   debugLog.push(msg);
 }
 export function getDebugLog(): string[] {
   var result = debugLog.slice();
   debugLog = [];
   return result;
-}
-
-function rgbaToHex(c: RGBA): string {
-  var to255 = function(v: number) { return Math.round(v * 255); };
-  var hex = function(v: number) { return to255(v).toString(16).padStart(2, '0'); };
-  return '#' + hex(c.r) + hex(c.g) + hex(c.b);
 }
 
 function isRGBA(value: unknown): value is RGBA {
@@ -40,21 +35,6 @@ async function resolveColorValue(value: unknown, depth: number): Promise<RGBA | 
     } catch (e) {}
   }
   return null;
-}
-
-function parseWeightName(w: string): number {
-  var lower = w.toLowerCase().replace(/[\s-_]/g, '');
-  if (lower === 'thin' || lower === 'hairline') return 100;
-  if (lower === 'extralight' || lower === 'ultralight') return 200;
-  if (lower === 'light') return 300;
-  if (lower === 'regular' || lower === 'normal') return 400;
-  if (lower === 'medium') return 500;
-  if (lower === 'semibold' || lower === 'demibold') return 600;
-  if (lower === 'bold') return 700;
-  if (lower === 'extrabold' || lower === 'ultrabold') return 800;
-  if (lower === 'black' || lower === 'heavy') return 900;
-  var num = parseInt(w, 10);
-  return isNaN(num) ? 400 : num;
 }
 
 function extractSolidColor(paints: readonly Paint[]): RGBA | null {
@@ -215,7 +195,7 @@ export async function loadColorTokens(): Promise<ColorToken[]> {
     var sArr: string[] = []; dStyleIds.forEach(function(id) { sArr.push(id); });
     for (var dsi = 0; dsi < sArr.length; dsi++) {
       var sk = 'style:' + sArr[dsi]; if (seen.has(sk)) continue;
-      try { var fs = figma.getStyleById(sArr[dsi]); if (fs && fs.type === 'PAINT') { var fp = fs as PaintStyle; var fc = extractSolidColor(fp.paints); if (fc) { seen.add(sk); tokens.push({ id: fp.id, key: fp.key, name: fp.name, source: 'paint-style', collectionName: 'Library', color: fc, hex: rgbaToHex(fc), allColors: [fc] }); } } } catch (e) {}
+      try { var fs = await figma.getStyleByIdAsync(sArr[dsi]); if (fs && fs.type === 'PAINT') { var fp = fs as PaintStyle; var fc = extractSolidColor(fp.paints); if (fc) { seen.add(sk); tokens.push({ id: fp.id, key: fp.key, name: fp.name, source: 'paint-style', collectionName: 'Library', color: fc, hex: rgbaToHex(fc), allColors: [fc] }); } } } catch (e) {}
     }
   } catch (e) { log('S6 FAILED: ' + String(e)); }
   log('After S6: ' + tokens.length);
@@ -230,8 +210,6 @@ export async function loadColorTokens(): Promise<ColorToken[]> {
 // ============================================================
 // TYPOGRAPHY VARIABLES
 // ============================================================
-
-import { TypographyGroup } from './types';
 
 /**
  * Load typography variables from the "Typography" collection.
@@ -387,7 +365,7 @@ export async function loadTypographyGroups(): Promise<TypographyGroup[]> {
       var tsId2 = (allNodes2[ni2] as TextNode).textStyleId;
       if (tsId2 && typeof tsId2 === 'string' && tsId2 !== '') {
         try {
-          var ds2 = figma.getStyleById(tsId2);
+          var ds2 = await figma.getStyleByIdAsync(tsId2);
           if (ds2 && ds2.type === 'TEXT' && !textStyleMap[ds2.name]) {
             textStyleMap[ds2.name] = ds2 as TextStyle;
           }
@@ -407,7 +385,7 @@ export async function loadTypographyGroups(): Promise<TypographyGroup[]> {
     var group = getOrCreate(gName);
     group.textStyleId = ts.id;
     group.fontSize = ts.fontSize;
-    group.fontWeight = parseWeightName(ts.fontName.style);
+    group.fontWeight = parseWeightToNumber(ts.fontName.style);
     // Extract lineHeight
     var lh = ts.lineHeight as any;
     if (lh && lh.unit === 'PERCENT') {
@@ -426,51 +404,31 @@ export async function loadTypographyGroups(): Promise<TypographyGroup[]> {
     log('  "' + gName + '" id=' + ts.id + ' ' + ts.fontSize + 'px ' + ts.fontName.style + ' (weight=' + group.fontWeight + ')');
   }
 
-  // If no text styles were loaded from the API, fall back to hardcoded Olympus data
+  // If no text styles were found, log a clear message (no hardcoded fallback)
   if (tsNames.length === 0) {
-    log('T1 No text styles from API — using hardcoded Olympus theme...');
-    var olympusTypo = [
-      { name: 'Headline 1', fontSize: 32, fontWeight: 600 },
-      { name: 'Headline 2', fontSize: 28, fontWeight: 600 },
-      { name: 'Headline 3', fontSize: 24, fontWeight: 600 },
-      { name: 'Headline 4', fontSize: 20, fontWeight: 600 },
-      { name: 'Headline 5', fontSize: 18, fontWeight: 600 },
-      { name: 'Subtitle 1', fontSize: 16, fontWeight: 500 },
-      { name: 'Subtitle 2', fontSize: 14, fontWeight: 500 },
-      { name: 'Body 1', fontSize: 16, fontWeight: 400 },
-      { name: 'Body 2', fontSize: 14, fontWeight: 400 },
-      { name: 'Caption', fontSize: 12, fontWeight: 400 },
-      { name: 'Overline', fontSize: 10, fontWeight: 600 },
-    ];
-    for (var oti = 0; oti < olympusTypo.length; oti++) {
-      var ot = olympusTypo[oti];
-      var fg = getOrCreate(ot.name);
-      fg.fontSize = ot.fontSize;
-      fg.fontWeight = ot.fontWeight;
-      varCount++;
-    }
+    log('No text styles found. Configure a library file key and API token in Settings to enable text style matching.');
   }
 
   // Convert to array and filter to groups that have at least fontSize
-  var result: TypographyGroup[] = [];
+  var typoResult: TypographyGroup[] = [];
   var groupNames = Object.keys(groups);
   for (var gi = 0; gi < groupNames.length; gi++) {
     var g = groups[groupNames[gi]];
     if (g.fontSize !== null) {
-      result.push(g);
+      typoResult.push(g);
     }
   }
 
-  log('TYPOGRAPHY: processed ' + varCount + ' vars → ' + result.length + ' groups with fontSize');
-  for (var di = 0; di < Math.min(10, result.length); di++) {
-    log('  "' + result[di].name + '" size=' + result[di].fontSize +
-      ' weight=' + result[di].fontWeight +
-      ' lh=' + result[di].lineHeight +
-      ' ls=' + result[di].letterSpacing +
-      ' styleId=' + (result[di].textStyleId || 'none'));
+  log('TYPOGRAPHY: processed ' + varCount + ' vars → ' + typoResult.length + ' groups with fontSize');
+  for (var di = 0; di < Math.min(10, typoResult.length); di++) {
+    log('  "' + typoResult[di].name + '" size=' + typoResult[di].fontSize +
+      ' weight=' + typoResult[di].fontWeight +
+      ' lh=' + typoResult[di].lineHeight +
+      ' ls=' + typoResult[di].letterSpacing +
+      ' styleId=' + (typoResult[di].textStyleId || 'none'));
   }
 
-  return result;
+  return typoResult;
 }
 
 // ============================================================
@@ -495,7 +453,7 @@ export async function importTextStylesByKeys(
       if (!imported || imported.type !== 'TEXT') continue;
 
       var ts = imported as TextStyle;
-      var fontWeight = parseWeightName(ts.fontName.style);
+      var fontWeight = parseWeightToNumber(ts.fontName.style);
       var lineHeight: number | null = null;
       var letterSpacing: number | null = null;
 

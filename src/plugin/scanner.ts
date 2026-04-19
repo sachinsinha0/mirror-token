@@ -1,17 +1,12 @@
-import { ColorIssue, TextIssue, TextGroup, ScanResults, RGBA, ColorToken, TypographyGroup, Confidence } from './types';
+import { ColorIssue, TextIssue, TextGroup, ScanResults, ColorToken, TypographyGroup, Confidence } from './types';
 import { findBestColorMatch } from './matcher';
+import { rgbaToHex, parseWeightToNumber } from './utils';
 
 var BATCH_SIZE = 500;
 var issueCounter = 0;
 
 function nextId(): string {
   return 'issue-' + (++issueCounter);
-}
-
-function rgbaToHex(c: RGBA): string {
-  var to255 = function(v: number) { return Math.round(v * 255); };
-  var hex = function(v: number) { return to255(v).toString(16).padStart(2, '0'); };
-  return '#' + hex(c.r) + hex(c.g) + hex(c.b);
 }
 
 function hasFills(node: SceneNode): node is SceneNode & { fills: readonly Paint[] } {
@@ -63,6 +58,35 @@ function findBestTypographyMatch(
       }
     }
 
+    // Prefer generic primitives over component-specific styles
+    // E.g. "Typography/Body 1" should beat "Components/Button Large" for same size+weight
+    var nameLower = g.name.toLowerCase();
+
+    // Primitive path prefixes (Material, Apple HIG, Carbon, Polaris, Ant, Fluent, Spectrum)
+    if (/^(typography|text|type|font|foundation|primitives?|styles|tokens)[\/\s]/i.test(g.name)) {
+      score += 3;
+    }
+
+    // Component-specific path prefixes — penalize
+    if (/^(components?|component|patterns?|cards?|tables?|forms?|inputs?|buttons?|navigation|nav|menus?|dialogs?|modals?|tabs?|alerts?|toolbars?)[\/\s]/i.test(g.name)) {
+      score -= 3;
+    }
+
+    // Also penalize when component-specific words appear anywhere in the path
+    if (/\b(button|badge|chip|tag|input|field|table|card|modal|dialog|menu|navigation|alert|toast|tooltip|tab|accordion|breadcrumb|pagination|stepper|slider|switch|checkbox|radio|select|dropdown|avatar|list ?item|menu ?item)\b/i.test(g.name)) {
+      score -= 2;
+    }
+
+    // Bonus for common primitive names (covers most major design systems)
+    if (/\b(headline|heading|header|body|subtitle|subheadline|caption|overline|display|title|label|paragraph|lead|text|code|callout|footnote|hero|detail|eyebrow|link)\b/i.test(g.name)) {
+      score += 2;
+    }
+
+    // Shorter paths are usually more generic
+    var segments = g.name.split('/').length;
+    if (segments === 1) score += 1;
+    else if (segments >= 3) score -= 1;
+
     if (score > bestScore) {
       bestScore = score;
       bestGroup = g;
@@ -71,44 +95,32 @@ function findBestTypographyMatch(
 
   if (!bestGroup || bestScore < 4) return null;
 
-  // Confidence: "exact" only when both size AND weight match perfectly
+  // Confidence: "exact" when size+weight+primitive naming all align
   var confidence: Confidence =
-    bestScore >= 15 ? 'exact' :
-    bestScore >= 10 ? 'high' :
-    bestScore >= 6 ? 'medium' : 'low';
+    bestScore >= 20 ? 'exact' :
+    bestScore >= 14 ? 'high' :
+    bestScore >= 8 ? 'medium' : 'low';
 
   return { group: bestGroup, confidence: confidence };
-}
-
-/** Convert CSS weight names to numbers */
-function parseWeightToNumber(w: string): number {
-  var lower = w.toLowerCase().replace(/[\s-_]/g, '');
-  if (lower === 'thin' || lower === 'hairline') return 100;
-  if (lower === 'extralight' || lower === 'ultralight') return 200;
-  if (lower === 'light') return 300;
-  if (lower === 'regular' || lower === 'normal' || lower === 'book') return 400;
-  if (lower === 'medium') return 500;
-  if (lower === 'semibold' || lower === 'demibold') return 600;
-  if (lower === 'bold') return 700;
-  if (lower === 'extrabold' || lower === 'ultrabold') return 800;
-  if (lower === 'black' || lower === 'heavy') return 900;
-  var num = parseInt(w, 10);
-  return isNaN(num) ? 0 : num;
 }
 
 export async function scanNodes(
   nodes: readonly SceneNode[],
   colorTokens: ColorToken[],
   typoGroups: TypographyGroup[],
-  onProgress: (processed: number, total: number) => void
+  onProgress: (processed: number, total: number) => void,
+  isCancelled?: () => boolean
 ): Promise<ScanResults> {
+  issueCounter = 0;
   var startTime = Date.now();
   var colorIssues: ColorIssue[] = [];
   var textIssues: TextIssue[] = [];
   var totalLinkedTokens = 0;
 
   var ignoredRaw = figma.root.getPluginData('ignoredIssues');
-  var ignoredSet = new Set<string>(ignoredRaw ? JSON.parse(ignoredRaw) : []);
+  var ignoredArr: string[] = [];
+  if (ignoredRaw) { try { ignoredArr = JSON.parse(ignoredRaw); } catch (e) { console.warn('[Mirror Link] Corrupt ignoredIssues data, resetting'); } }
+  var ignoredSet = new Set<string>(ignoredArr);
 
   for (var i = 0; i < nodes.length; i++) {
     var node = nodes[i];
@@ -144,7 +156,7 @@ export async function scanNodes(
     // --- Check strokes ---
     if (hasStrokes(node)) {
       var strokes = node.strokes;
-      if (strokes !== figma.mixed) {
+      if ((strokes as any) !== figma.mixed) {
         for (var si = 0; si < strokes.length; si++) {
           var stroke = strokes[si];
           if (stroke.type !== 'SOLID') continue;
@@ -216,6 +228,12 @@ export async function scanNodes(
 
     if ((i + 1) % BATCH_SIZE === 0 || i === nodes.length - 1) {
       onProgress(i + 1, nodes.length);
+      // Yield to event loop so UI stays responsive and cancel messages can arrive
+      if ((i + 1) % BATCH_SIZE === 0) {
+        await new Promise<void>(function(r) { setTimeout(r, 0); });
+      }
+      // Check cancellation
+      if (isCancelled && isCancelled()) break;
     }
   }
 

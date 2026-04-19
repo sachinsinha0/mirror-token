@@ -8,5 +8,5 @@
     "typeRoots": ["node_modules/@figma"],
     "types": ["plugin-typings"]
   },
-  "include": ["src/plugin/**/*.ts"]
+  "include": ["src/plugin/**/*.ts", "src/shared/**/*.ts"]
 }

@@ -8,5 +8,5 @@
     "jsx": "react-jsx",
     "types": ["react", "react-dom"]
   },
-  "include": ["src/ui/**/*.ts", "src/ui/**/*.tsx"]
+  "include": ["src/ui/**/*.ts", "src/ui/**/*.tsx", "src/shared/**/*.ts"]
 }
